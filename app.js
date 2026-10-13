@@ -340,14 +340,15 @@ $('mapping').addEventListener('change', (e) => {
   render();
 });
 
-const APP_VERSION = 'v3';
+const APP_VERSION = 'v4';
 
 (async function start() {
   $('ver').textContent = APP_VERSION;
+  const got = new URLSearchParams(location.search).get('got');
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   const shared = new URLSearchParams(location.search).get('shared');
   if (shared) history.replaceState(null, '', './');
   const buf = await loadSaved();
   if (!buf) return show('empty', shared === '0' ? '공유받은 파일을 읽지 못했습니다. ‘가계부 열기’로 다시 시도해 주세요.' : '');
-  try { useLedger(buf); } catch (err) { show('empty', err.message); }
+  try { useLedger(buf); } catch (err) { show('empty', err.message + (got ? ` (받은 파일: ${got})` : '')); }
 })();

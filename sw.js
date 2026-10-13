@@ -1,4 +1,4 @@
-const VERSION = 'v3';
+const VERSION = 'v4';
 const SHELL = 'shell-' + VERSION;
 const DATA = 'ledger-data';
 const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
@@ -20,13 +20,16 @@ self.addEventListener('activate', (e) => {
 async function receiveShare(request) {
   try {
     const form = await request.formData();
-    const file = form.get('file');
-    if (file && file.arrayBuffer) {
+    // 메일 보내기로 공유하면 본문 글과 첨부 엑셀이 함께 온다. 가장 큰 것이 가계부다.
+    const files = form.getAll('file').filter((f) => f && f.arrayBuffer);
+    const file = files.sort((a, b) => b.size - a.size)[0];
+    const info = files.map((f) => `${f.type || '?'}:${f.size}`).join(',');
+    if (file) {
       const cache = await caches.open(DATA);
       await cache.put('./ledger-file', new Response(await file.arrayBuffer(), {
         headers: { 'X-Name': encodeURIComponent(file.name || ''), 'X-Saved': String(Date.now()) },
       }));
-      return Response.redirect('./?shared=1', 303);
+      return Response.redirect('./?shared=1&got=' + encodeURIComponent(info), 303);
     }
   } catch (err) { /* 아래에서 실패 화면으로 */ }
   return Response.redirect('./?shared=0', 303);
