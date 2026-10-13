@@ -9,6 +9,8 @@ let months = [];     // 'YYYY-MM' 오름차순
 let current = '';    // 보고 있는 달
 let lastDate = '';   // 가계부의 마지막 날짜
 let mapping = {};    // 카드 id -> 가계부 자산 이름
+let realSpend = {};  // '카드 id|YYYY-MM' -> 카드 앱에서 확인한 실제 실적
+try { realSpend = JSON.parse(localStorage.getItem('realspend') || '{}'); } catch (e) { /* 저장값 없이 진행 */ }
 
 // ---------- 가계부 읽기 ----------
 
@@ -110,29 +112,58 @@ function prevMonth(ym) {
 
 function monthSpend(card, ym) {
   const asset = mapping[card.id];
-  const list = asset ? txs.filter((t) => t.asset === asset && t.ym === ym) : [];
+  // 가계부는 최신순이라 뒤집어서 날짜순으로 둔다
+  const list = asset ? txs.filter((t) => t.asset === asset && t.ym === ym).reverse() : [];
   const byKind = {};
   let counted = 0;
   for (const t of list) {
     byKind[t.kind] = (byKind[t.kind] || 0) + t.amt;
     if (!card.excluded.includes(t.kind)) counted += t.amt;
   }
-  return { counted, byKind };
+  return { counted, byKind, list };
+}
+
+const tierOf = (card, counted) => card.tiers.filter((v) => counted >= v).length - 1;
+const benefitCap = (b, tier) => (tier >= 0 ? b.capSpend[Math.min(tier, b.capSpend.length - 1)] : 0);
+
+// 그 달의 인정 실적. 할인받은 결제가 실적에서 빠지는 카드는 한도만큼 덜어낸다.
+// 한도는 전달 실적 구간에 달려 있어 몇 달 거슬러 올라가며 계산한다.
+function countedFor(card, ym, depth = 0) {
+  // 카드 앱에서 확인한 실제 실적을 넣어 두었으면 그 값을 쓴다
+  const real = realSpend[card.id + '|' + ym];
+  if (real > 0) return real;
+  const m = monthSpend(card, ym);
+  if (!card.discountExcluded) return m.counted;
+  const tier = depth >= 3 ? 0 : tierOf(card, countedFor(card, prevMonth(ym), depth + 1));
+  let cut = 0;
+  for (const b of card.benefits) {
+    if (!card.discountExcluded.includes(b.id)) continue;
+    // 날짜순으로, 한도가 남아 있는 동안의 결제는 건 전체가 빠진다
+    let room = benefitCap(b, tier);
+    for (const t of m.list) {
+      if (room <= 0) break;
+      if (!b.cats.includes(t.kind) || card.excluded.includes(t.kind)) continue;
+      cut += t.amt;
+      room -= t.amt;
+    }
+  }
+  return m.counted - cut;
 }
 
 function cardState(card, ym) {
   const asset = mapping[card.id];
   const now = monthSpend(card, ym);
-  const before = monthSpend(card, prevMonth(ym));
+  now.counted = countedFor(card, ym);
+  const before = { counted: countedFor(card, prevMonth(ym)) };
   // 이 달 이전에 쓴 적이 없는 새 카드는 혜택이 유예되는 것으로 본다
   const isNew = asset && !txs.some((t) => t.asset === asset && t.ym < ym);
-  let tier = card.tiers.filter((v) => before.counted >= v).length - 1;
+  let tier = tierOf(card, before.counted);
   if (isNew) tier = 0;
   const active = tier >= 0;
 
   const benefits = card.benefits.map((b) => {
     const used = b.cats.reduce((s, k) => s + (now.byKind[k] || 0), 0);
-    const cap = active ? b.capSpend[Math.min(tier, b.capSpend.length - 1)] : 0;
+    const cap = benefitCap(b, tier);
     return { ...b, used, cap, left: Math.max(0, cap - used) };
   });
 
@@ -147,7 +178,9 @@ function cardState(card, ym) {
   const usefulCapped = Math.min(useful, benefits.reduce((s, b) => s + (b.cats.some((k) => !card.excluded.includes(k)) ? b.cap : 0), 0));
   plain += useful - usefulCapped;
   const need = Math.max(0, card.tiers[0] - usefulCapped);
-  const overflow = card.id === OVERFLOW_CARD ? 0 : Math.max(0, plain - need);
+  let overflow = card.id === OVERFLOW_CARD ? 0 : Math.max(0, plain - need);
+  // 할인분이 실적에서 빠지는 카드는 인정 실적 전체가 혜택 없는 결제다
+  if (card.discountExcluded) overflow = Math.max(0, now.counted - card.tiers[0]);
 
   let earned = 0;
   if (card.earn) {
@@ -195,7 +228,7 @@ function buildAdvice(states) {
 
   // 혜택 없는 결제로 실적을 채워야 하는 카드 (모자란 금액이 작은 순)
   const short = states
-    .filter((x) => x.asset && !x.card.optional && x.remain > 0 && !(x.card.id === 'taptap' && ep && ep.left > 0))
+    .filter((x) => x.asset && !x.card.optional && x.remain > 0)
     .sort((a, b) => a.remain - b.remain);
   const chain = short.map((x) => `${x.card.name} ${won(x.remain)}`);
 
@@ -309,7 +342,9 @@ function renderMapping() {
   const assets = [...new Set(txs.filter((t) => recent.includes(t.ym)).map((t) => t.asset))].sort();
   $('mapping').innerHTML = CARDS.map((c) => {
     const opts = ['<option value="">없음</option>'].concat(assets.map((a) => `<option${a === mapping[c.id] ? ' selected' : ''}>${esc(a)}</option>`));
-    return `<label><span>${esc(c.name)}</span><select data-card="${c.id}">${opts.join('')}</select></label>`;
+    const real = realSpend[c.id + '|' + prevMonth(current)] || '';
+    return `<label><span>${esc(c.name)}</span><select data-card="${c.id}">${opts.join('')}</select></label>
+      <label class="real"><span>지난달 실제 실적</span><input data-real="${c.id}" type="text" inputmode="numeric" placeholder="카드 앱 숫자 (선택)" value="${real ? Number(real).toLocaleString('ko-KR') : ''}"></label>`;
   }).join('');
 }
 
@@ -390,6 +425,15 @@ $('ask-text').addEventListener('input', (e) => { const t = findType(e.target.val
 $('ask-amount').addEventListener('input', () => ask(askKind));
 $('ask-chips').addEventListener('click', (e) => { const k = e.target.dataset.kind; if (k) { $('ask-text').value = ''; ask(k); } });
 $('mapping').addEventListener('change', (e) => {
+  const realId = e.target.dataset.real;
+  if (realId) {
+    const key = realId + '|' + prevMonth(current);
+    const v = Number(e.target.value.replace(/[^0-9]/g, ''));
+    if (v > 0) realSpend[key] = v; else delete realSpend[key];
+    try { localStorage.setItem('realspend', JSON.stringify(realSpend)); } catch (err) { /* 이번 화면에만 반영 */ }
+    render();
+    return;
+  }
   const id = e.target.dataset.card;
   if (!id) return;
   mapping[id] = e.target.value;
@@ -397,7 +441,7 @@ $('mapping').addEventListener('change', (e) => {
   render();
 });
 
-const APP_VERSION = 'v5';
+const APP_VERSION = 'v6';
 
 (async function start() {
   $('ver').textContent = APP_VERSION;

@@ -10,6 +10,7 @@ const CATEGORY_RULES = [
   ['gas', (t) => t.sub === '가스요금' || /도시가스|에너지서비스/.test(t.text)],
   ['mgmt', (t) => t.sub === '관리비'],
   ['transit', (t) => ['택시', '지하철', '버스'].includes(t.sub)],
+  ['gift', (t) => /선물하기/.test(t.text)],
   ['telecom', (t) => /LGUPLUS|유플러스|통신요금/i.test(t.text)],
   ['streaming', (t) => /넷플릭스|NETFLIX|티빙|웨이브|왓챠|멜론|FLO|유튜브|YOUTUBE|디즈니/i.test(t.text)],
   ['delivery', (t) => /쿠팡이츠|우아한형제들|배달의민족|배민|요기요/.test(t.text)],
@@ -19,14 +20,15 @@ const CATEGORY_RULES = [
   ['overseas', (t) => /ANTHROPIC|OPENAI|USD|해외승인/i.test(t.text)],
   ['insurance', (t) => t.sub === '보험' || /보험/.test(t.text)],
   ['cvs', (t) => /씨유|CU\(|\bCU\b|지에스25|GS25|GS대치|세븐일레븐|이마트24/i.test(t.text)],
+  ['daily', (t) => /다이소|올리브영/.test(t.text)],
   ['selfcare', (t) => (t.cat === '미용' && t.sub === '미용비') || /헤어|미용실|이발|스포애니|헬스|필라테스|요가/.test(t.text)],
   ['general', () => true],
 ];
 
 const CATEGORY_LABEL = {
   fee: '연회비', fuel: '주유', toll: '통행료', tax: '세금·공과금', gas: '도시가스', mgmt: '관리비',
-  transit: '택시·대중교통', telecom: '통신요금', streaming: '구독', delivery: '배달앱', coupang: '쿠팡',
-  easypay: '간편결제', airline: '항공권', overseas: '해외 결제', insurance: '보험', cvs: '편의점', selfcare: '미용·운동', general: '그 외',
+  transit: '택시·대중교통', gift: '카카오 선물하기', telecom: '통신요금', streaming: '구독', delivery: '배달앱', coupang: '쿠팡',
+  easypay: '간편결제', airline: '항공권', overseas: '해외 결제', insurance: '보험', cvs: '편의점', daily: '다이소·올리브영', selfcare: '미용·운동', general: '그 외',
 };
 
 // tiers: 지난달 실적 구간. excluded: 실적으로 안 쳐주는 종류.
@@ -37,14 +39,19 @@ const CARDS = [
     name: '삼성 taptap DIGITAL',
     match: /탭탭|taptap/i,
     color: '#2f6fed',
-    tiers: [300000],
-    excluded: ['fee', 'tax', 'gas', 'mgmt', 'transit'],
+    // 2026-10 삼성카드 앱 화면으로 확인: 구간 30/60/90만, 1구간 한도는 간편결제 1만·구독 5천·편의점 5천.
+    // 구독 한도 5천/7천/1만은 실제 할인 내역으로 확인. 간편결제 2구간 한도(1.5만)는 추정.
+    tiers: [300000, 600000, 900000],
+    // 실적제외 내역으로 확인: 택시, 카카오 선물하기, 그리고 할인받은 결제(간편결제·편의점·구독)가 빠진다.
+    excluded: ['fee', 'tax', 'gas', 'mgmt', 'transit', 'gift'],
+    // 할인 한도가 남아 있는 동안의 결제는 건 전체가 실적에서 빠진다
+    discountExcluded: ['easypay', 'cvs', 'streaming'],
     benefits: [
-      { id: 'easypay', label: '간편결제 5%', cats: ['delivery', 'coupang', 'easypay'], rate: 0.05, capSpend: [400000] },
-      { id: 'streaming', label: '구독 50%', cats: ['streaming'], rate: 0.5, capSpend: [20000] },
-      { id: 'cvs', label: '편의점 10%', cats: ['cvs'], rate: 0.1, capSpend: [50000] },
+      { id: 'easypay', label: '간편결제 5%', cats: ['delivery', 'coupang', 'easypay'], rate: 0.05, capSpend: [200000, 300000, 400000] },
+      { id: 'streaming', label: '구독 50%', cats: ['streaming'], rate: 0.5, capSpend: [10000, 14000, 20000] },
+      { id: 'cvs', label: '편의점·다이소·올리브영 10%', cats: ['cvs', 'daily'], rate: 0.1, capSpend: [50000] },
     ],
-    note: '가계부에 할인 후 금액을 적고 있어 실제 결제액은 조금 더 큽니다.',
+    note: '할인받은 결제는 실적에서 빠져서, 실적은 할인 없는 결제로 채워야 합니다. 가계부에 할인 후 금액을 적고 있어 실제와 조금 다를 수 있습니다.',
   },
   {
     id: 'deepoil',
@@ -81,7 +88,7 @@ const CARDS = [
     match: /the\s?id|아이디|platinum|플래티넘|플래티늄/i,
     color: '#5b4bc4',
     tiers: [500000],
-    excluded: ['fee', 'tax', 'gas', 'mgmt', 'transit'],
+    excluded: ['fee', 'tax', 'gas', 'mgmt', 'transit', 'gift'],
     benefits: [],
     // 포인트 적립률. 여기 없는 종류는 base.
     earn: { base: 0.01, delivery: 0.012, coupang: 0.012, airline: 0.015, overseas: 0.015, toll: 0, tax: 0, fee: 0, gas: 0, mgmt: 0, transit: 0 },
@@ -114,6 +121,7 @@ const PURCHASE_TYPES = [
   { kind: 'fuel', label: '주유', words: ['주유', '기름', '오일뱅크'] },
   { kind: 'toll', label: '통행료', words: ['통행료', '톨비', '하이패스', '톨게이트'] },
   { kind: 'cvs', label: '편의점', words: ['편의점', 'cu', 'gs25', '씨유', '세븐일레븐'] },
+  { kind: 'daily', label: '다이소·올리브영', words: ['다이소', '올리브영', '생활용품'] },
   { kind: 'streaming', label: '구독', words: ['넷플릭스', '유튜브', '구독', '멜론', '티빙'] },
   { kind: 'insurance', label: '보험', words: ['보험'], note: '보험사에 카드로 직접 낼 때만 할인됩니다. 네이버페이로 내면 빠질 수 있습니다.' },
   { kind: 'telecom', label: '통신요금', words: ['통신', '휴대폰요금', '핸드폰요금', '폰요금'] },
