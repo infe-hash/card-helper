@@ -340,7 +340,10 @@ $('mapping').addEventListener('change', (e) => {
   render();
 });
 
+const APP_VERSION = 'v3';
+
 (async function start() {
+  $('ver').textContent = APP_VERSION;
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   const shared = new URLSearchParams(location.search).get('shared');
   if (shared) history.replaceState(null, '', './');

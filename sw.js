@@ -1,4 +1,4 @@
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL = 'shell-' + VERSION;
 const DATA = 'ledger-data';
 const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
@@ -40,8 +40,10 @@ self.addEventListener('fetch', (e) => {
   }
   if (e.request.method !== 'GET') return;
   // 새 버전이 있으면 받아 두고, 오프라인이면 저장본으로
+  // 브라우저에 남은 옛 파일을 쓰지 않도록 서버에 매번 확인한다
+  const fresh = url.origin === location.origin ? new Request(e.request, { cache: 'no-cache' }) : e.request;
   e.respondWith(
-    fetch(e.request)
+    fetch(fresh)
       .then((res) => {
         if (res.ok && (url.origin === location.origin || e.request.url === XLSX_URL)) {
           const copy = res.clone();
