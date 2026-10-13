@@ -1,0 +1,36 @@
+{
+  "name": "카드 도우미",
+  "short_name": "카드 도우미",
+  "description": "가계부 엑셀을 공유하면 카드별 실적과 추천 카드를 보여줍니다",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f5f7",
+  "theme_color": "#1f3a5f",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "share_target": {
+    "action": "./share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        {
+          "name": "file",
+          "accept": [
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+            "application/octet-stream",
+            "text/csv",
+            ".xlsx",
+            ".xls",
+            ".csv"
+          ]
+        }
+      ]
+    }
+  }
+}

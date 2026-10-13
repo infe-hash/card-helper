@@ -1,0 +1,302 @@
+const $ = (id) => document.getElementById(id);
+const won = (n) => Math.round(n).toLocaleString('ko-KR') + '원';
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const DATA_CACHE = 'ledger-data';
+const DATA_KEY = './ledger-file';
+
+let txs = [];        // 지출 내역
+let months = [];     // 'YYYY-MM' 오름차순
+let current = '';    // 보고 있는 달
+let lastDate = '';   // 가계부의 마지막 날짜
+let mapping = {};    // 카드 id -> 가계부 자산 이름
+
+// ---------- 가계부 읽기 ----------
+
+function toDateParts(v) {
+  if (typeof v === 'number') {
+    const d = new Date(Math.round((v - 25569) * 86400000));
+    return [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()];
+  }
+  if (v instanceof Date) return [v.getFullYear(), v.getMonth() + 1, v.getDate()];
+  const m = String(v || '').match(/(\d{4})\D(\d{1,2})\D(\d{1,2})/);
+  return m ? [+m[1], +m[2], +m[3]] : null;
+}
+
+function parseLedger(buf) {
+  const wb = XLSX.read(buf, { type: 'array' });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true });
+  const head = (rows[0] || []).map((h) => String(h).trim());
+  const col = (name) => head.indexOf(name);
+  const c = { date: col('날짜'), asset: col('자산'), cat: col('분류'), sub: col('소분류'), desc: col('내용'), amt: col('KRW'), type: col('수입/지출'), memo: col('메모') };
+  if (c.date < 0 || c.asset < 0 || c.amt < 0 || c.type < 0) throw new Error('편한가계부 엑셀 형식이 아닙니다. (날짜·자산·KRW·수입/지출 열이 필요합니다)');
+
+  const out = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r || r[c.type] !== '지출') continue;
+    const p = toDateParts(r[c.date]);
+    const amt = Number(r[c.amt]);
+    if (!p || !amt) continue;
+    const t = {
+      ym: p[0] + '-' + String(p[1]).padStart(2, '0'),
+      day: p[2],
+      asset: String(r[c.asset] || '').trim(),
+      cat: String(r[c.cat] || '').trim(),
+      sub: String(r[c.sub] || '').trim(),
+      text: String(r[c.desc] || '') + ' ' + String(r[c.memo] || ''),
+      amt,
+    };
+    t.kind = CATEGORY_RULES.find((rule) => rule[1](t))[0];
+    out.push(t);
+  }
+  if (!out.length) throw new Error('지출 내역을 찾지 못했습니다.');
+  return out;
+}
+
+// ---------- 계산 ----------
+
+function prevMonth(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  return m === 1 ? (y - 1) + '-12' : y + '-' + String(m - 1).padStart(2, '0');
+}
+
+function monthSpend(card, ym) {
+  const asset = mapping[card.id];
+  const list = asset ? txs.filter((t) => t.asset === asset && t.ym === ym) : [];
+  const byKind = {};
+  let counted = 0;
+  for (const t of list) {
+    byKind[t.kind] = (byKind[t.kind] || 0) + t.amt;
+    if (!card.excluded.includes(t.kind)) counted += t.amt;
+  }
+  return { counted, byKind };
+}
+
+function cardState(card, ym) {
+  const asset = mapping[card.id];
+  const now = monthSpend(card, ym);
+  const before = monthSpend(card, prevMonth(ym));
+  // 이 달 이전에 쓴 적이 없는 새 카드는 혜택이 유예되는 것으로 본다
+  const isNew = asset && !txs.some((t) => t.asset === asset && t.ym < ym);
+  let tier = card.tiers.filter((v) => before.counted >= v).length - 1;
+  if (isNew) tier = 0;
+  const active = tier >= 0;
+
+  const benefits = card.benefits.map((b) => {
+    const used = b.cats.reduce((s, k) => s + (now.byKind[k] || 0), 0);
+    const cap = active ? b.capSpend[Math.min(tier, b.capSpend.length - 1)] : 0;
+    return { ...b, used, cap, left: Math.max(0, cap - used) };
+  });
+
+  // 혜택 없이 실적만 쌓는 결제가 필요한 만큼을 넘었는지
+  const benefitKinds = new Set(card.benefits.flatMap((b) => b.cats));
+  let useful = 0;
+  let plain = 0;
+  for (const [kind, amt] of Object.entries(now.byKind)) {
+    if (card.excluded.includes(kind)) continue;
+    if (benefitKinds.has(kind)) useful += amt; else plain += amt;
+  }
+  const usefulCapped = Math.min(useful, benefits.reduce((s, b) => s + (b.cats.some((k) => !card.excluded.includes(k)) ? b.cap : 0), 0));
+  plain += useful - usefulCapped;
+  const need = Math.max(0, card.tiers[0] - usefulCapped);
+  const overflow = card.id === OVERFLOW_CARD ? 0 : Math.max(0, plain - need);
+
+  let earned = 0;
+  if (card.earn) {
+    for (const [kind, amt] of Object.entries(now.byKind)) earned += amt * (kind in card.earn ? card.earn[kind] : card.earn.base);
+  }
+  let annual = null;
+  if (card.annual && asset) {
+    const from = card.annual.start.slice(0, 7);
+    const sum = txs.filter((t) => t.asset === asset && t.ym >= from && t.ym <= ym && !card.excluded.includes(t.kind)).reduce((s, t) => s + t.amt, 0);
+    annual = { sum, ...card.annual };
+  }
+
+  return {
+    card, asset, isNew, active, tier, benefits, overflow, earned, annual,
+    spend: now.counted, before: before.counted, total: Object.values(now.byKind).reduce((s, v) => s + v, 0),
+    remain: Math.max(0, card.tiers[0] - now.counted),
+    nextTier: card.tiers.find((v) => v > now.counted),
+  };
+}
+
+// ---------- 추천 ----------
+
+function buildAdvice(states) {
+  const s = Object.fromEntries(states.map((x) => [x.card.id, x]));
+  const has = (id) => s[id] && s[id].asset;
+  const ben = (id, bid) => (has(id) ? s[id].benefits.find((b) => b.id === bid) : null);
+  const over = CARDS.find((c) => c.id === OVERFLOW_CARD).name;
+  const rows = [];
+
+  const ep = ben('taptap', 'easypay');
+  const kbDel = ben('kb', 'delivery');
+  if (ep && ep.left > 0) {
+    rows.push(['쿠팡이츠·쿠팡·네이버페이', s.taptap.card.name, `5% 한도까지 ${won(ep.left)} 더 쓸 수 있음`]);
+  } else {
+    const why = ep && !s.taptap.active ? 'taptap은 지난달 실적 미달로 이번 달 할인 없음' : 'taptap 간편결제 한도를 다 씀';
+    if (kbDel && kbDel.left > 0) rows.push(['쿠팡이츠·배민', s.kb.card.name + ' (KB Pay)', `${why}. KB 배달 10% 한도 ${won(kbDel.left)} 남음`]);
+    rows.push(['쿠팡·네이버페이', over, `${why}. 1~1.2% 적립`]);
+  }
+
+  const fuel = ben('deepoil', 'fuel');
+  const kbFuel = ben('kb', 'fuel');
+  if (fuel && fuel.left > 0) rows.push(['주유', s.deepoil.card.name, `10% 한도까지 ${won(fuel.left)} 남음`]);
+  else if (kbFuel && kbFuel.left > 0) rows.push(['주유', s.kb.card.name, `Deep Oil 한도를 다 씀. KB 주유 10% 한도 ${won(kbFuel.left)} 남음`]);
+  else rows.push(['주유', over, '주유 할인 한도를 다 씀. 1% 적립']);
+
+  // 혜택 없는 결제로 실적을 채워야 하는 카드 (모자란 금액이 작은 순)
+  const short = states
+    .filter((x) => x.asset && !x.card.optional && x.remain > 0 && !(x.card.id === 'taptap' && ep && ep.left > 0))
+    .sort((a, b) => a.remain - b.remain);
+  const chain = short.map((x) => `${x.card.name} ${won(x.remain)}`);
+
+  const tollCard = has('deepoil') && s.deepoil.remain > 0 ? s.deepoil : short[0];
+  rows.push(['통행료', tollCard ? tollCard.card.name : '아무 카드', tollCard ? `실적 ${won(tollCard.remain)} 모자람` : '모든 카드 실적을 채움. 통행료는 어디서도 적립 안 됨']);
+
+  rows.push(['옷·병원·그 외', chain.length ? chain.join(' → ') : over, chain.length ? `위 금액만 채우고, 나머지는 전부 ${over}` : '모든 카드 실적을 채움. 1% 적립']);
+  rows.push(['항공권', over, '항공사 공식 홈페이지·앱에서 결제하면 1.5% 적립']);
+  rows.push(['통신요금·넷플릭스', '지금 그대로', '통신요금은 KB, 넷플릭스는 taptap 자동결제']);
+  rows.push(['일본 현지 결제', '네이버 머니카드', '해외 수수료가 없음']);
+  return rows;
+}
+
+// ---------- 화면 ----------
+
+function bar(ratio, color) {
+  return `<div class="bar"><i style="width:${Math.min(100, Math.max(0, ratio * 100)).toFixed(1)}%;background:${color}"></i></div>`;
+}
+
+function renderCard(x) {
+  const { card } = x;
+  if (!x.asset) {
+    return `<article class="card off"><h3><span class="dot" style="background:${card.color}"></span>${esc(card.name)}<span class="badge">연결 안 됨</span></h3>
+      <p class="hint">가계부에 이 카드의 자산이 없습니다. 추가한 뒤 아래 ‘카드 연결’에서 골라 주세요.</p></article>`;
+  }
+  const goal = card.tiers[0];
+  const done = x.remain === 0;
+  const badge = done ? '<span class="badge ok">실적 채움</span>' : `<span class="badge warn">${won(x.remain)} 더</span>`;
+  let html = `<article class="card${card.optional ? ' off' : ''}"><h3><span class="dot" style="background:${card.color}"></span>${esc(card.name)}${badge}</h3>`;
+  html += `<div class="big"><span class="num">${won(x.spend)}</span><span class="muted">/ ${won(goal)} (다음 달 혜택 조건)</span></div>`;
+  html += bar(x.spend / goal, card.color);
+
+  if (card.benefits.length) {
+    const status = x.isNew ? '새 카드라 이번 달 혜택 적용' : x.active ? `지난달 실적 ${won(x.before)} → 이번 달 혜택 적용` : `지난달 실적 ${won(x.before)} → 이번 달 혜택 없음`;
+    html += `<p class="hint ${x.active ? '' : 'warn'}">${status}</p>`;
+  }
+  for (const b of x.benefits) {
+    if (!b.cap) continue;
+    const saved = Math.min(b.used, b.cap) * b.rate;
+    html += `<div class="row"><div class="line"><span>${esc(b.label)}</span><span>${won(b.used)} / ${won(b.cap)} · 약 ${won(saved)} 할인</span></div>${bar(b.used / b.cap, b.left ? card.color : 'var(--ok)')}</div>`;
+  }
+  if (card.earn) html += `<p class="hint ok">이번 달 적립 약 ${won(x.earned).replace('원', 'P')}</p>`;
+  if (x.annual) {
+    html += `<div class="row"><div class="line"><span>${esc(x.annual.label)}</span><span>${won(x.annual.sum)} / ${won(x.annual.target)}</span></div>${bar(x.annual.sum / x.annual.target, card.color)}</div>`;
+  }
+  if (x.overflow > 0) {
+    const overCard = CARDS.find((c) => c.id === OVERFLOW_CARD);
+    html += `<p class="hint warn">혜택 없이 넘치게 쓴 금액 ${won(x.overflow)} — ${esc(overCard.name)}로 썼다면 약 ${won(x.overflow * overCard.earn.base).replace('원', 'P')} 적립</p>`;
+  }
+  if (done && x.nextTier && card.benefits.length && card.tiers.length > 1) {
+    html += `<p class="hint">다음 구간 ${won(x.nextTier)}까지 ${won(x.nextTier - x.spend)}</p>`;
+  }
+  if (card.note) html += `<p class="hint muted">${esc(card.note)}</p>`;
+  return html + '</article>';
+}
+
+function renderMapping() {
+  const recent = months.slice(-6);
+  const assets = [...new Set(txs.filter((t) => recent.includes(t.ym)).map((t) => t.asset))].sort();
+  $('mapping').innerHTML = CARDS.map((c) => {
+    const opts = ['<option value="">없음</option>'].concat(assets.map((a) => `<option${a === mapping[c.id] ? ' selected' : ''}>${esc(a)}</option>`));
+    return `<label><span>${esc(c.name)}</span><select data-card="${c.id}">${opts.join('')}</select></label>`;
+  }).join('');
+}
+
+function render() {
+  const states = CARDS.map((c) => cardState(c, current));
+  const [y, m] = current.split('-').map(Number);
+  $('month-label').textContent = `${y}년 ${m}월`;
+  const today = new Date();
+  const isThisMonth = today.getFullYear() === y && today.getMonth() + 1 === m;
+  const left = isThisMonth ? new Date(y, m, 0).getDate() - today.getDate() : null;
+  $('month-sub').textContent = `가계부 ${lastDate}까지` + (left !== null ? ` · 이번 달 ${left}일 남음` : '');
+  $('prev').disabled = months.indexOf(current) <= 0;
+  $('next').disabled = months.indexOf(current) >= months.length - 1;
+
+  $('advice').innerHTML = buildAdvice(states).map(([what, use, why]) =>
+    `<li><span class="what">${esc(what)}</span><span class="use"><b>${esc(use)}</b><small>${esc(why)}</small></span></li>`).join('');
+  $('cards').innerHTML = states.filter((x) => !x.card.optional || x.total > 0).map(renderCard).join('');
+  renderMapping();
+}
+
+function show(which, message) {
+  $('empty').hidden = which !== 'empty';
+  $('content').hidden = which !== 'content';
+  $('error').hidden = !message;
+  $('error').textContent = message || '';
+}
+
+function loadMapping() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('cardmap') || '{}'); } catch (e) { /* 저장값 없이 진행 */ }
+  const recent = months.slice(-6);
+  const assets = [...new Set(txs.filter((t) => recent.includes(t.ym)).map((t) => t.asset))];
+  mapping = {};
+  for (const c of CARDS) {
+    mapping[c.id] = c.id in saved && (saved[c.id] === '' || assets.includes(saved[c.id])) ? saved[c.id] : (assets.find((a) => c.match.test(a)) || '');
+  }
+}
+
+function useLedger(buf) {
+  txs = parseLedger(buf);
+  months = [...new Set(txs.map((t) => t.ym))].sort();
+  current = months[months.length - 1];
+  const last = txs.filter((t) => t.ym === current).reduce((d, t) => Math.max(d, t.day), 0);
+  lastDate = `${+current.slice(5)}월 ${last}일`;
+  loadMapping();
+  show('content');
+  render();
+}
+
+async function saveLedger(buf) {
+  try { await (await caches.open(DATA_CACHE)).put(DATA_KEY, new Response(buf)); } catch (e) { /* 저장 못 해도 화면은 보여준다 */ }
+}
+
+async function loadSaved() {
+  try {
+    const res = await (await caches.open(DATA_CACHE)).match(DATA_KEY);
+    return res ? await res.arrayBuffer() : null;
+  } catch (e) { return null; }
+}
+
+// ---------- 시작 ----------
+
+$('file').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const buf = await f.arrayBuffer();
+    useLedger(buf);
+    saveLedger(buf);
+  } catch (err) { show(txs.length ? 'content' : 'empty', err.message); }
+  e.target.value = '';
+});
+$('prev').addEventListener('click', () => { current = months[months.indexOf(current) - 1]; render(); });
+$('next').addEventListener('click', () => { current = months[months.indexOf(current) + 1]; render(); });
+$('mapping').addEventListener('change', (e) => {
+  const id = e.target.dataset.card;
+  if (!id) return;
+  mapping[id] = e.target.value;
+  try { localStorage.setItem('cardmap', JSON.stringify(mapping)); } catch (err) { /* 이번 화면에만 반영 */ }
+  render();
+});
+
+(async function start() {
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  const shared = new URLSearchParams(location.search).get('shared');
+  if (shared) history.replaceState(null, '', './');
+  const buf = await loadSaved();
+  if (!buf) return show('empty', shared === '0' ? '공유받은 파일을 읽지 못했습니다. ‘가계부 열기’로 다시 시도해 주세요.' : '');
+  try { useLedger(buf); } catch (err) { show('empty', err.message); }
+})();
