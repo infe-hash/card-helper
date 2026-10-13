@@ -74,7 +74,7 @@ const CARDS = [
     match: /you\s?prime/i,
     color: '#c98a00',
     tiers: [400000, 800000, 1600000],
-    excluded: ['fee', 'tax', 'gas', 'mgmt', 'telecom'],
+    excluded: ['fee', 'tax', 'gas', 'mgmt', 'telecom', 'transit'],
     // 2026-10 KB 앱 실적 내역으로 확인: 할인받은 결제(KB Pay 배달 등)는 실적에서 빠진다. 배민클럽 이용권은 할인 없이 실적 인정.
     discountExcluded: ['delivery', 'fuel', 'selfcare', 'cvs'],
     benefits: [
@@ -126,6 +126,7 @@ const PURCHASE_TYPES = [
   { kind: 'coupang', label: '쿠팡', words: ['쿠팡', '로켓'], note: 'KB 쿠팡 할인은 KB Pay로 결제해야 합니다.' },
   { kind: 'easypay', label: '네이버페이·온라인', words: ['네이버페이', '네이버', '온라인', '스마트스토어', '카카오페이', '인터넷'], note: '온라인에서 네이버페이·카카오페이 등으로 결제할 때입니다.' },
   { kind: 'taxi', label: '택시', words: ['택시', '카카오t', '우버', 'uber'], note: '삼성카드 두 장은 택시가 실적에도 적립에도 안 잡힙니다. 우버는 택시 업종으로 안 잡혀 할인이 빠질 수 있습니다.' },
+  { kind: 'transit', label: '지하철·버스', words: ['지하철', '버스', '대중교통', '교통카드'], note: '어느 카드도 할인은 없습니다. 삼성카드 두 장과 KB는 실적에도 안 잡혀서, 실적으로 인정되는 신한카드가 낫습니다.' },
   { kind: 'fuel', label: '주유', words: ['주유', '기름', '오일뱅크'] },
   { kind: 'toll', label: '통행료', words: ['통행료', '톨비', '하이패스', '톨게이트'] },
   { kind: 'cvs', label: '편의점', words: ['편의점', 'cu', 'gs25', '씨유', '세븐일레븐'] },

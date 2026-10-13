@@ -260,7 +260,17 @@ function recommend(kind, amount, states) {
     .forEach((x) => steps.push({ name: x.card.name, why: `할인은 없지만 실적 ${won(x.remain)} 모자람`, room: x.remain }));
   const over = CARDS.find((c) => c.id === OVERFLOW_CARD);
   const rate = kind in over.earn ? over.earn[kind] : over.earn.base;
-  steps.push({ name: over.name, why: rate ? `${+(rate * 100).toFixed(1)}% 적립, 한도 없음` : '어느 카드도 혜택 없음', room: Infinity });
+  if (rate) {
+    steps.push({ name: over.name, why: `${+(rate * 100).toFixed(1)}% 적립, 한도 없음`, room: Infinity });
+  } else {
+    // 적립도 안 되는 결제는 실적으로라도 인정해 주는 카드로
+    const counts = live.find((x) => !x.card.excluded.includes(kind));
+    const name = counts ? counts.card.name : over.name;
+    const last = steps[steps.length - 1];
+    // 바로 앞 단계가 같은 카드면 줄을 늘리지 않고 그 카드로 끝까지 쓴다
+    if (last && last.name === name) last.room = Infinity;
+    else steps.push({ name, why: counts ? '혜택은 없지만 실적으로는 인정됨' : '어느 카드도 혜택 없음', room: Infinity });
+  }
   if (!amount) return steps;
   const plan = [];
   let rest = amount;
@@ -442,7 +452,7 @@ $('mapping').addEventListener('change', (e) => {
   render();
 });
 
-const APP_VERSION = 'v8';
+const APP_VERSION = 'v9';
 
 (async function start() {
   $('ver').textContent = APP_VERSION;

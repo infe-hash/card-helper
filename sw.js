@@ -1,4 +1,4 @@
-const VERSION = 'v8';
+const VERSION = 'v9';
 const SHELL = 'shell-' + VERSION;
 const DATA = 'ledger-data';
 const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
