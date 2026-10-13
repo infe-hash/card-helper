@@ -40,7 +40,7 @@ const CARDS = [
     match: /탭탭|taptap/i,
     color: '#2f6fed',
     // 2026-10 삼성카드 앱 화면으로 확인: 구간 30/60/90만, 1구간 한도는 간편결제 1만·구독 5천·편의점 5천.
-    // 구독 한도 5천/7천/1만은 실제 할인 내역으로 확인. 간편결제 2구간 한도(1.5만)는 추정.
+    // 간편결제 한도 1만/1.5만/2만, 구독 한도 5천/7천/1만 모두 앱 화면으로 확인.
     tiers: [300000, 600000, 900000],
     // 실적제외 내역으로 확인: 택시, 카카오 선물하기, 그리고 할인받은 결제(간편결제·편의점·구독)가 빠진다.
     excluded: ['fee', 'tax', 'gas', 'mgmt', 'transit', 'gift'],
@@ -89,7 +89,9 @@ const CARDS = [
     color: '#5b4bc4',
     tiers: [500000],
     excluded: ['fee', 'tax', 'gas', 'mgmt', 'transit', 'gift'],
-    benefits: [],
+    benefits: [
+      { id: 'streaming', label: '구독 50%', cats: ['streaming'], rate: 0.5, capSpend: [20000] },
+    ],
     // 포인트 적립률. 여기 없는 종류는 base.
     earn: { base: 0.01, delivery: 0.012, coupang: 0.012, airline: 0.015, overseas: 0.015, toll: 0, tax: 0, fee: 0, gas: 0, mgmt: 0, transit: 0 },
     annual: { start: '2026-10-01', target: 6000000, label: '2년 차 기프트 조건' },

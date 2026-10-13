@@ -237,7 +237,8 @@ function buildAdvice(states) {
 
   rows.push(['옷·병원·그 외', chain.length ? chain.join(' → ') : over, chain.length ? `위 금액만 채우고, 나머지는 전부 ${over}` : '모든 카드 실적을 채움. 1% 적립']);
   rows.push(['항공권', over, '항공사 공식 홈페이지·앱에서 결제하면 1.5% 적립']);
-  rows.push(['통신요금·넷플릭스', '지금 그대로', '통신요금은 KB, 넷플릭스는 taptap 자동결제']);
+  rows.push(['통신요금', s.kb ? s.kb.card.name : 'KB YOU Prime', '자동납부 그대로']);
+  rows.push(['넷플릭스', over, '50% 할인, 월 1만 원까지. taptap(지금 구간 월 5천 원)보다 큼']);
   rows.push(['일본 현지 결제', '네이버 머니카드', '해외 수수료가 없음']);
   return rows;
 }
@@ -253,7 +254,7 @@ function recommend(kind, amount, states) {
       if (b.cats.includes(kind) && b.left > 0) steps.push({ name: x.card.name, why: `${b.label} · ${won(b.left)}까지 할인`, room: b.left, rate: b.rate });
     }
   }
-  steps.sort((a, b) => b.rate - a.rate);
+  steps.sort((a, b) => b.rate - a.rate || b.room - a.room);
   live.filter((x) => x.remain > 0 && x.card.id !== OVERFLOW_CARD && !x.card.excluded.includes(kind))
     .sort((a, b) => a.remain - b.remain)
     .forEach((x) => steps.push({ name: x.card.name, why: `할인은 없지만 실적 ${won(x.remain)} 모자람`, room: x.remain }));
@@ -441,7 +442,7 @@ $('mapping').addEventListener('change', (e) => {
   render();
 });
 
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v7';
 
 (async function start() {
   $('ver').textContent = APP_VERSION;
