@@ -50,5 +50,16 @@ ol { margin: 0 0 10px; padding-left: 20px; }
 .hint.ok { color: var(--ok); }
 .card.off { opacity: .75; }
 
+.ask-inputs { display: grid; grid-template-columns: 1fr 110px; gap: 8px; }
+.ask-inputs input { width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font-size: 16px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.chips button { padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--text); font-size: 13px; }
+.chips button.on { background: var(--text); color: var(--panel); border-color: var(--text); }
+.ask-kind { margin: 14px 0 6px; font-weight: 700; }
+.steps { margin: 0 0 8px; padding-left: 22px; }
+.steps li { padding: 6px 0; }
+.steps li:first-child b { font-size: 17px; }
+.steps small { display: block; color: var(--muted); font-size: 13px; }
+
 #mapping label { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
 #mapping select { max-width: 55%; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 14px; }

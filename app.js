@@ -209,6 +209,58 @@ function buildAdvice(states) {
   return rows;
 }
 
+// 결제 종류 하나에 대해 쓸 카드를 좋은 순서로 늘어놓는다
+function recommend(kind, amount, states) {
+  const type = PURCHASE_TYPES.find((t) => t.kind === kind);
+  if (type.fixed) return [{ name: type.fixed[0], why: type.fixed[1], room: Infinity }];
+  const live = states.filter((x) => x.asset && !x.card.optional);
+  const steps = [];
+  for (const x of live) {
+    for (const b of x.benefits) {
+      if (b.cats.includes(kind) && b.left > 0) steps.push({ name: x.card.name, why: `${b.label} · ${won(b.left)}까지 할인`, room: b.left, rate: b.rate });
+    }
+  }
+  steps.sort((a, b) => b.rate - a.rate);
+  live.filter((x) => x.remain > 0 && x.card.id !== OVERFLOW_CARD && !x.card.excluded.includes(kind))
+    .sort((a, b) => a.remain - b.remain)
+    .forEach((x) => steps.push({ name: x.card.name, why: `할인은 없지만 실적 ${won(x.remain)} 모자람`, room: x.remain }));
+  const over = CARDS.find((c) => c.id === OVERFLOW_CARD);
+  const rate = kind in over.earn ? over.earn[kind] : over.earn.base;
+  steps.push({ name: over.name, why: rate ? `${+(rate * 100).toFixed(1)}% 적립, 한도 없음` : '어느 카드도 혜택 없음', room: Infinity });
+  if (!amount) return steps;
+  const plan = [];
+  let rest = amount;
+  for (const s of steps) {
+    const use = Math.min(rest, s.room);
+    if (use > 0) plan.push({ ...s, use });
+    rest -= use;
+    if (rest <= 0) break;
+  }
+  return plan;
+}
+
+function findType(query) {
+  const q = norm(query);
+  if (!q) return null;
+  return PURCHASE_TYPES.find((t) => t.words.some((w) => q.includes(norm(w)) || norm(w).includes(q))) || PURCHASE_TYPES.find((t) => t.kind === 'general');
+}
+
+let askKind = '';
+
+function renderAsk(states) {
+  $('ask-chips').innerHTML = PURCHASE_TYPES.map((t) => `<button type="button" data-kind="${t.kind}"${t.kind === askKind ? ' class="on"' : ''}>${esc(t.label)}</button>`).join('');
+  const type = PURCHASE_TYPES.find((t) => t.kind === askKind);
+  if (!type) { $('ask-result').innerHTML = ''; return; }
+  const amount = Number(String($('ask-amount').value).replace(/[^0-9]/g, '')) || 0;
+  const steps = recommend(type.kind, amount, states);
+  let html = `<p class="ask-kind">${esc(type.label)}${amount ? ' · ' + won(amount) : ''}</p><ol class="steps">`;
+  html += steps.map((s) => `<li><b>${esc(s.name)}${s.use ? ' ' + won(s.use) : ''}</b><small>${esc(s.why)}</small></li>`).join('');
+  html += '</ol>';
+  if (!amount && steps.length > 1) html += '<p class="muted">위에서부터 한도·실적을 채우는 순서입니다. 금액을 넣으면 나눠서 계산합니다.</p>';
+  if (type.note) html += `<p class="muted">${esc(type.note)}</p>`;
+  $('ask-result').innerHTML = html;
+}
+
 // ---------- 화면 ----------
 
 function bar(ratio, color) {
@@ -272,6 +324,7 @@ function render() {
   $('prev').disabled = months.indexOf(current) <= 0;
   $('next').disabled = months.indexOf(current) >= months.length - 1;
 
+  renderAsk(states);
   $('advice').innerHTML = buildAdvice(states).map(([what, use, why]) =>
     `<li><span class="what">${esc(what)}</span><span class="use"><b>${esc(use)}</b><small>${esc(why)}</small></span></li>`).join('');
   $('cards').innerHTML = states.filter((x) => !x.card.optional || x.total > 0).map(renderCard).join('');
@@ -332,6 +385,10 @@ $('file').addEventListener('change', async (e) => {
 });
 $('prev').addEventListener('click', () => { current = months[months.indexOf(current) - 1]; render(); });
 $('next').addEventListener('click', () => { current = months[months.indexOf(current) + 1]; render(); });
+function ask(kind) { askKind = kind; renderAsk(CARDS.map((c) => cardState(c, current))); }
+$('ask-text').addEventListener('input', (e) => { const t = findType(e.target.value); ask(t ? t.kind : ''); });
+$('ask-amount').addEventListener('input', () => ask(askKind));
+$('ask-chips').addEventListener('click', (e) => { const k = e.target.dataset.kind; if (k) { $('ask-text').value = ''; ask(k); } });
 $('mapping').addEventListener('change', (e) => {
   const id = e.target.dataset.card;
   if (!id) return;
@@ -340,7 +397,7 @@ $('mapping').addEventListener('change', (e) => {
   render();
 });
 
-const APP_VERSION = 'v4';
+const APP_VERSION = 'v5';
 
 (async function start() {
   $('ver').textContent = APP_VERSION;

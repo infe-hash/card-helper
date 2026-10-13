@@ -17,13 +17,16 @@ const CATEGORY_RULES = [
   ['easypay', (t) => /네이버페이|네이버파이낸|카카오페이|비바리퍼블리|토스페이|PAYCO|페이코|SSGPAY/i.test(t.text)],
   ['airline', (t) => /항공|에어부산|진에어|티웨이|에어서울/.test(t.text)],
   ['overseas', (t) => /ANTHROPIC|OPENAI|USD|해외승인/i.test(t.text)],
+  ['insurance', (t) => t.sub === '보험' || /보험/.test(t.text)],
+  ['cvs', (t) => /씨유|CU\(|\bCU\b|지에스25|GS25|GS대치|세븐일레븐|이마트24/i.test(t.text)],
+  ['selfcare', (t) => (t.cat === '미용' && t.sub === '미용비') || /헤어|미용실|이발|스포애니|헬스|필라테스|요가/.test(t.text)],
   ['general', () => true],
 ];
 
 const CATEGORY_LABEL = {
   fee: '연회비', fuel: '주유', toll: '통행료', tax: '세금·공과금', gas: '도시가스', mgmt: '관리비',
   transit: '택시·대중교통', telecom: '통신요금', streaming: '구독', delivery: '배달앱', coupang: '쿠팡',
-  easypay: '간편결제', airline: '항공권', overseas: '해외 결제', general: '그 외',
+  easypay: '간편결제', airline: '항공권', overseas: '해외 결제', insurance: '보험', cvs: '편의점', selfcare: '미용·운동', general: '그 외',
 };
 
 // tiers: 지난달 실적 구간. excluded: 실적으로 안 쳐주는 종류.
@@ -39,6 +42,7 @@ const CARDS = [
     benefits: [
       { id: 'easypay', label: '간편결제 5%', cats: ['delivery', 'coupang', 'easypay'], rate: 0.05, capSpend: [400000] },
       { id: 'streaming', label: '구독 50%', cats: ['streaming'], rate: 0.5, capSpend: [20000] },
+      { id: 'cvs', label: '편의점 10%', cats: ['cvs'], rate: 0.1, capSpend: [50000] },
     ],
     note: '가계부에 할인 후 금액을 적고 있어 실제 결제액은 조금 더 큽니다.',
   },
@@ -62,9 +66,12 @@ const CARDS = [
     tiers: [400000, 800000, 1600000],
     excluded: ['fee', 'tax', 'gas', 'mgmt', 'telecom'],
     benefits: [
-      { id: 'telecom', label: '통신 10%', cats: ['telecom'], rate: 0.1, capSpend: [50000, 70000, 100000] },
+      { id: 'telecom', label: '통신·보험 10%', cats: ['telecom', 'insurance'], rate: 0.1, capSpend: [50000, 70000, 100000] },
       { id: 'delivery', label: '배달 10% (KB Pay)', cats: ['delivery'], rate: 0.1, capSpend: [50000, 70000, 100000] },
       { id: 'fuel', label: '주유 10%', cats: ['fuel'], rate: 0.1, capSpend: [50000, 70000, 100000] },
+      { id: 'selfcare', label: '미용·운동 5%', cats: ['selfcare'], rate: 0.05, capSpend: [100000, 140000, 200000] },
+      { id: 'cvs', label: '편의점 5%', cats: ['cvs'], rate: 0.05, capSpend: [100000, 140000, 200000] },
+      { id: 'shop', label: '쿠팡 5% (KB Pay)', cats: ['coupang'], rate: 0.05, capSpend: [100000, 140000, 200000] },
     ],
     note: '할인받은 결제(통신요금)는 실적에서 빠집니다. 배달 할인은 KB Pay로 결제해야 합니다.',
   },
@@ -96,3 +103,21 @@ const CARDS = [
 
 // 실적을 다 채운 뒤 남는 결제를 보낼 카드
 const OVERFLOW_CARD = 'id';
+
+// '무엇을 결제하나요?' 검색어. words 중 하나가 들어 있으면 그 종류로 본다.
+// fixed 가 있으면 계산 없이 그대로 안내한다.
+const PURCHASE_TYPES = [
+  { kind: 'selfcare', label: '미용실·운동', words: ['머리', '미용', '헤어', '커트', '컷', '펌', '염색', '이발', '헬스', '운동', '필라테스', '골프'], note: '매장에서 카드로 직접 결제해야 할인됩니다. 네이버 예약 결제는 할인에서 빠질 수 있습니다.' },
+  { kind: 'delivery', label: '배달', words: ['배달', '쿠팡이츠', '배민', '치킨', '피자'], note: 'KB 배달 할인은 KB Pay로 결제해야 합니다.' },
+  { kind: 'coupang', label: '쿠팡', words: ['쿠팡', '로켓'], note: 'KB 쿠팡 할인은 KB Pay로 결제해야 합니다.' },
+  { kind: 'easypay', label: '네이버페이·온라인', words: ['네이버페이', '네이버', '온라인', '스마트스토어', '카카오페이', '인터넷'], note: '온라인에서 네이버페이·카카오페이 등으로 결제할 때입니다.' },
+  { kind: 'fuel', label: '주유', words: ['주유', '기름', '오일뱅크'] },
+  { kind: 'toll', label: '통행료', words: ['통행료', '톨비', '하이패스', '톨게이트'] },
+  { kind: 'cvs', label: '편의점', words: ['편의점', 'cu', 'gs25', '씨유', '세븐일레븐'] },
+  { kind: 'streaming', label: '구독', words: ['넷플릭스', '유튜브', '구독', '멜론', '티빙'] },
+  { kind: 'insurance', label: '보험', words: ['보험'], note: '보험사에 카드로 직접 낼 때만 할인됩니다. 네이버페이로 내면 빠질 수 있습니다.' },
+  { kind: 'telecom', label: '통신요금', words: ['통신', '휴대폰요금', '핸드폰요금', '폰요금'] },
+  { kind: 'airline', label: '항공권', words: ['항공', '비행기'], note: '항공사 공식 홈페이지·앱에서 결제해야 1.5%가 적립됩니다.' },
+  { kind: 'japan', label: '일본 현지', words: ['일본', '해외', '엔화', '현지'], fixed: ['네이버 머니카드', '해외 수수료가 없음'] },
+  { kind: 'general', label: '옷·병원·식당·그 외', words: ['옷', '병원', '약국', '식당', '밥', '카페', '커피', '선물', '그외', '기타'] },
+];
