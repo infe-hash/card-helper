@@ -25,6 +25,9 @@
             "application/vnd.ms-excel",
             "application/octet-stream",
             "text/csv",
+            "text/comma-separated-values",
+            "application/zip",
+            "*/*",
             ".xlsx",
             ".xls",
             ".csv"
