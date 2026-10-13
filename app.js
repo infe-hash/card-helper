@@ -442,7 +442,7 @@ $('mapping').addEventListener('change', (e) => {
   render();
 });
 
-const APP_VERSION = 'v7';
+const APP_VERSION = 'v8';
 
 (async function start() {
   $('ver').textContent = APP_VERSION;
