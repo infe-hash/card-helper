@@ -22,20 +22,68 @@ function toDateParts(v) {
   return m ? [+m[1], +m[2], +m[3]] : null;
 }
 
+// 열 이름 후보 (한글·영문 내보내기 모두)
+const COLUMNS = {
+  date: ['날짜', '기간', 'date', 'period'],
+  asset: ['자산', 'account', 'accounts', 'asset'],
+  cat: ['분류', 'category'],
+  sub: ['소분류', 'subcategory'],
+  desc: ['내용', 'note', 'contents'],
+  amt: ['krw', '금액', 'amount'],
+  type: ['수입/지출', 'income/expense', '구분'],
+  memo: ['메모', 'description', 'memo'],
+};
+const EXPENSE_WORDS = ['지출', 'expense', 'exp.', 'expenses'];
+const norm = (v) => String(v == null ? '' : v).replace(/[\s﻿]/g, '').toLowerCase();
+
+function readWorkbook(buf) {
+  const b = new Uint8Array(buf);
+  const isZip = b[0] === 0x50 && b[1] === 0x4b;
+  const isOle = b[0] === 0xd0 && b[1] === 0xcf;
+  if (isZip || isOle) return XLSX.read(buf, { type: 'array' });
+  // 글자로 된 파일(CSV·TSV·HTML)은 한글이 깨지지 않게 직접 풀어서 넘긴다
+  let enc = 'utf-8';
+  if (b[0] === 0xff && b[1] === 0xfe) enc = 'utf-16le';
+  else if (b[0] === 0xfe && b[1] === 0xff) enc = 'utf-16be';
+  let text = new TextDecoder(enc).decode(buf);
+  if (enc === 'utf-8' && text.includes('�')) text = new TextDecoder('euc-kr').decode(buf);
+  return XLSX.read(text, { type: 'string' });
+}
+
+function describeFile(buf, wb, rows) {
+  const b = new Uint8Array(buf);
+  const sig = Array.from(b.slice(0, 4)).map((x) => x.toString(16).padStart(2, '0')).join(' ');
+  const first = (rows || []).slice(0, 2).map((r) => (r || []).slice(0, 8).join(' | ')).join(' // ');
+  return `크기 ${b.length.toLocaleString()}바이트, 시작 ${sig}, 시트 ${wb ? wb.SheetNames.join(',') : '없음'}, 첫 줄: ${first.slice(0, 160) || '(비어 있음)'}`;
+}
+
 function parseLedger(buf) {
-  const wb = XLSX.read(buf, { type: 'array' });
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true });
-  const head = (rows[0] || []).map((h) => String(h).trim());
-  const col = (name) => head.indexOf(name);
-  const c = { date: col('날짜'), asset: col('자산'), cat: col('분류'), sub: col('소분류'), desc: col('내용'), amt: col('KRW'), type: col('수입/지출'), memo: col('메모') };
-  if (c.date < 0 || c.asset < 0 || c.amt < 0 || c.type < 0) throw new Error('편한가계부 엑셀 형식이 아닙니다. (날짜·자산·KRW·수입/지출 열이 필요합니다)');
+  let wb;
+  try { wb = readWorkbook(buf); } catch (e) { throw new Error('파일을 열지 못했습니다. ' + describeFile(buf)); }
+
+  // 시트마다 앞쪽 10줄 안에서 제목 줄을 찾는다
+  let rows = [];
+  let c = null;
+  let start = 0;
+  for (const name of wb.SheetNames) {
+    const sheet = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true });
+    if (!rows.length) rows = sheet;
+    for (let i = 0; i < Math.min(10, sheet.length) && !c; i++) {
+      const head = (sheet[i] || []).map(norm);
+      const found = {};
+      for (const [key, names] of Object.entries(COLUMNS)) found[key] = head.findIndex((h) => names.includes(h));
+      if (found.date >= 0 && found.asset >= 0 && found.amt >= 0 && found.type >= 0) { c = found; rows = sheet; start = i + 1; }
+    }
+    if (c) break;
+  }
+  if (!c) throw new Error('편한가계부 엑셀 형식으로 읽지 못했습니다. 이 화면을 캡처해 보내 주세요. ' + describeFile(buf, wb, rows));
 
   const out = [];
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = start; i < rows.length; i++) {
     const r = rows[i];
-    if (!r || r[c.type] !== '지출') continue;
+    if (!r || !EXPENSE_WORDS.includes(norm(r[c.type]))) continue;
     const p = toDateParts(r[c.date]);
-    const amt = Number(r[c.amt]);
+    const amt = Number(String(r[c.amt]).replace(/,/g, ''));
     if (!p || !amt) continue;
     const t = {
       ym: p[0] + '-' + String(p[1]).padStart(2, '0'),
